@@ -29,7 +29,7 @@ TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "true").lower() != "false"
 DATA_DIR = Path(r"C:\Stock\data")
 LOG_DIR = DATA_DIR / "logs"
 REPORT_DIR = DATA_DIR / "reports"
-PRINCIPLES_DIR = DATA_DIR / "principles"
+PRINCIPLES_DIR = Path(__file__).parent / "data" / "principles"
 PDF_CACHE_DIR = Path(r"C:\Stock\hankyungpdf")
 
 for _d in (LOG_DIR, REPORT_DIR, PRINCIPLES_DIR):

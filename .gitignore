@@ -1,7 +1,8 @@
 .env
+token.json
+token_real.json
 __pycache__/
 *.pyc
+*.pyo
 hankyungpdf/
 logs/
-last_report.txt
-token.json
