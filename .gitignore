@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+hankyungpdf/
+logs/
+last_report.txt
+token.json
