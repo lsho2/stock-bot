@@ -29,14 +29,14 @@ _naver.headers.update({
 })
 
 
-def get_token() -> str:
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, "r") as f:
+def _get_token_from(base_url: str, token_file: str) -> str:
+    if os.path.exists(token_file):
+        with open(token_file, "r") as f:
             data = json.load(f)
         if time.time() - data["time"] < 82800:
             return data["token"]
 
-    url = f"{KIS_BASE_URL}/oauth2/tokenP"
+    url = f"{base_url}/oauth2/tokenP"
     body = {
         "grant_type": "client_credentials",
         "appkey": APP_KEY,
@@ -45,9 +45,17 @@ def get_token() -> str:
     res = requests.post(url, json=body, timeout=10)
     token = res.json()["access_token"]
 
-    with open(TOKEN_FILE, "w") as f:
+    with open(token_file, "w") as f:
         json.dump({"token": token, "time": time.time()}, f)
     return token
+
+
+def get_token() -> str:
+    return _get_token_from(KIS_BASE_URL, TOKEN_FILE)
+
+
+def get_real_token() -> str:
+    return _get_token_from(KIS_REAL_URL, "token_real.json")
 
 
 def _fetch_kis(stock_code: str) -> dict:
@@ -139,18 +147,25 @@ def _kis_headers(token: str, tr_id: str) -> dict:
     }
 
 
-def get_chart_data(stock_code: str) -> list[dict]:
-    """KIS API로 최근 20일 일봉 데이터 조회.
+def get_chart_data(stock_code: str, limit: int = 20) -> list[dict]:
+    """KIS API로 일봉 데이터 조회.
 
-    반환: [{"날짜": "20260514", "시가": 187100, "고가": ..., "저가": ..., "종가": ..., "거래량": ...}, ...]
+    limit: 반환할 최대 행 수 (기본 20). MA60 계산 시 90 이상 지정.
+    반환: [{"날짜": "20260514", "종가": ..., "거래량": ...}, ...] (최신→과거 순)
     """
+    from datetime import datetime, timedelta
     token = get_token()
     url = f"{KIS_REAL_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+    today = datetime.now().strftime("%Y%m%d")
+    cal_days = max(40, limit * 2)  # 거래일 확보를 위해 달력일 2배 조회
+    start = (datetime.now() - timedelta(days=cal_days)).strftime("%Y%m%d")
     params = {
         "fid_cond_mrkt_div_code": "J",
         "fid_input_iscd": stock_code,
         "fid_period_div_code": "D",
         "fid_org_adj_prc": "1",
+        "fid_input_date_1": start,
+        "fid_input_date_2": today,
     }
     try:
         resp = requests.get(
@@ -160,25 +175,105 @@ def get_chart_data(stock_code: str) -> list[dict]:
             timeout=10,
         )
         data = resp.json()
-        if DEBUG:
-            print(f"  [DEBUG] 일봉 응답 전체:\n{json.dumps(data, ensure_ascii=False, indent=2)}")
-        else:
-            print(f"  [일봉] rt_cd={data.get('rt_cd')}  msg1={data.get('msg1')}  output2 건수={len(data.get('output2') or [])}")
-        output = data.get("output2") or []
+        output = data.get("output") or []
     except Exception as exc:
         print(f"  일봉 조회 오류 ({stock_code}): {exc}")
         return []
 
     result = []
-    for row in output[:20]:
+    for row in output[:limit]:
+        date = row.get("stck_bsop_date", "")
+        close = int(row["stck_clpr"]) if row.get("stck_clpr") else 0
+        vol = int(row["acml_vol"]) if row.get("acml_vol") else 0
         result.append({
-            "날짜": row.get("stck_bsop_date", ""),
-            "시가": int(row["stck_oprc"]) if row.get("stck_oprc") else 0,
-            "고가": int(row["stck_hgpr"]) if row.get("stck_hgpr") else 0,
-            "저가": int(row["stck_lwpr"]) if row.get("stck_lwpr") else 0,
-            "종가": int(row["stck_clpr"]) if row.get("stck_clpr") else 0,
-            "거래량": int(row["acml_vol"]) if row.get("acml_vol") else 0,
+            "날짜": date,
+            "종가": close,
+            "거래량": vol,
         })
+    return result
+
+
+def _ema(values: list[float], period: int) -> list[float]:
+    """지수이동평균(EMA). values는 오래된 순서(oldest-first)."""
+    if len(values) < period:
+        return []
+    k = 2.0 / (period + 1)
+    result = [sum(values[:period]) / period]
+    for v in values[period:]:
+        result.append(v * k + result[-1] * (1 - k))
+    return result
+
+
+def _calc_indicators(closes: list[float], investor: list[dict]) -> dict:
+    """종가 리스트(최신→과거 순)와 외국인 데이터로 기술적 지표 계산."""
+    result: dict = {}
+    if not closes:
+        return result
+
+    rev = list(reversed(closes))  # 오래된→최신 순으로 변환
+    n = len(rev)
+
+    def _ma(period: int) -> float | None:
+        if n < period:
+            return None
+        return round(sum(rev[-period:]) / period)
+
+    ma5 = _ma(5)
+    ma20 = _ma(20)
+    ma60 = _ma(60)
+
+    if ma5 is not None:
+        result["MA5"] = ma5
+    if ma20 is not None:
+        result["MA20"] = ma20
+    if ma60 is not None:
+        result["MA60"] = ma60
+
+    if ma20 is not None:
+        result["MA20_위"] = closes[0] >= ma20
+
+    if ma5 is not None and ma20 is not None:
+        result["골든크로스"] = ma5 > ma20
+
+    # ── RSI(14) ────────────────────────────────────────────────────────────
+    if n >= 15:
+        gains, losses = [], []
+        for i in range(1, n):
+            diff = rev[i] - rev[i - 1]
+            gains.append(max(diff, 0.0))
+            losses.append(max(-diff, 0.0))
+        avg_gain = sum(gains[:14]) / 14
+        avg_loss = sum(losses[:14]) / 14
+        for i in range(14, len(gains)):
+            avg_gain = (avg_gain * 13 + gains[i]) / 14
+            avg_loss = (avg_loss * 13 + losses[i]) / 14
+        rsi = 100.0 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
+        result["RSI14"] = round(rsi, 1)
+
+    # ── MACD(12,26,9) ──────────────────────────────────────────────────────
+    if n >= 34:
+        ema12 = _ema(rev, 12)
+        ema26 = _ema(rev, 26)
+        # ema12[i+14]과 ema26[i]는 같은 시점에 대응 (26-12=14)
+        macd_line = [ema12[i + 14] - ema26[i] for i in range(len(ema26))]
+        if len(macd_line) >= 9:
+            signal_line = _ema(macd_line, 9)
+            macd_val = macd_line[-1]
+            signal_val = signal_line[-1]
+            result["MACD"] = round(macd_val, 2)
+            result["MACD_signal"] = round(signal_val, 2)
+            result["MACD_histogram"] = round(macd_val - signal_val, 2)
+
+    # ── 외국인 연속 순매수 일수 ───────────────────────────────────────────
+    if investor:
+        streak = 0
+        for row in investor:  # 최신→과거 순
+            if row["외국인순매수"] > 0:
+                streak += 1
+            else:
+                break
+        result["외국인연속순매수"] = streak
+
     return result
 
 
@@ -235,6 +330,14 @@ def get_stock_info(stock_code: str) -> dict:
     except Exception as exc:
         print(f"  Naver 오류 ({stock_code}): {exc}")
 
+    try:
+        chart = get_chart_data(stock_code, limit=90)
+        investor = get_investor_data(stock_code)
+        closes = [r["종가"] for r in chart]
+        info.update(_calc_indicators(closes, investor))
+    except Exception as exc:
+        print(f"  지표 계산 오류 ({stock_code}): {exc}")
+
     return info
 
 
@@ -242,12 +345,12 @@ if __name__ == "__main__":
     import sys
     code = sys.argv[1] if len(sys.argv) > 1 else "005930"
 
-    print("=== 기본 정보 ===")
+    print("=== 기본 정보 + 기술적 지표 ===")
     for k, v in get_stock_info(code).items():
         print(f"  {k}: {v}")
 
     print("\n=== 일봉 (최근 20일) ===")
-    for row in get_chart_data(code):
+    for row in get_chart_data(code, limit=20):
         print(f"  {row['날짜']}  종가:{row['종가']:,}  거래량:{row['거래량']:,}")
 
     print("\n=== 외국인/기관 순매수 (최근 20일) ===")

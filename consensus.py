@@ -19,13 +19,21 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from stock_info import get_stock_info
+from volume_surge import get_volume_surge
 from telegram_alert import send_message
 
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-LOG_DIR = Path(r"C:\Stock\stock-bot")
+TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "true").lower() != "false"
+DATA_DIR = Path(r"C:\Stock\data")
+LOG_DIR = DATA_DIR / "logs"
+REPORT_DIR = DATA_DIR / "reports"
+PRINCIPLES_DIR = DATA_DIR / "principles"
 PDF_CACHE_DIR = Path(r"C:\Stock\hankyungpdf")
+
+for _d in (LOG_DIR, REPORT_DIR, PRINCIPLES_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
 
 BASE_URL = "https://consensus.hankyung.com"
 LIST_URL = f"{BASE_URL}/analysis/list"
@@ -122,13 +130,24 @@ def extract_text(pdf_path: Path, max_chars: int = MAX_CHARS_PER_PDF) -> str:
         return ""
 
 
+_TRADING_PRINCIPLES_PATH = PRINCIPLES_DIR / "trading_principles.txt"
+if _TRADING_PRINCIPLES_PATH.exists():
+    _TRADING_PRINCIPLES = _TRADING_PRINCIPLES_PATH.read_text(encoding="utf-8")
+    print(f"트레이딩 원칙 로드 완료 ({len(_TRADING_PRINCIPLES)}자)")
+else:
+    _TRADING_PRINCIPLES = ""
+    print(f"트레이딩 원칙 파일 없음: {_TRADING_PRINCIPLES_PATH}")
+
 _SYSTEM = (
     "당신은 10년 경력의 한국 주식시장 전문 애널리스트입니다. "
     "오늘 발행된 증권사 리서치 리포트를 종합해 실전 투자에 바로 활용 가능한 인사이트를 제공합니다. "
     "투자자의 성향은 중장기(3~6개월) 보유, 기업 성장성 기반 투자이며 단타는 하지 않습니다. "
     "목표 수익률은 월 2%, 연 10% 수준입니다. "
     "근거 없는 추측은 하지 않으며, 리포트에 언급된 내용만을 바탕으로 답변합니다. "
-    "한국어로 답변하세요."
+    "한국어로 답변하세요.\n\n"
+    "다음은 검증된 트레이딩 원칙(EmperorBTC Trading Manual)입니다. "
+    "종목 추천 및 매매 전략 수립 시 이 원칙들을 참고하여 분석하세요:\n\n"
+    + _TRADING_PRINCIPLES
 )
 
 
@@ -151,6 +170,7 @@ def _first_pass(client: genai.Client, reports_text: str) -> str:
         config=types.GenerateContentConfig(
             system_instruction=_SYSTEM,
             max_output_tokens=8192,
+            temperature=0,
         ),
     )
     return resp.text or ""
@@ -170,16 +190,44 @@ def _extract_stock_codes(text: str | None) -> list[str]:
     return result
 
 
+_BOOL_LABELS = {
+    "MA20_위": ("MA20 위(강세)", "MA20 아래(약세)"),
+    "골든크로스": ("골든크로스(상승)", "데드크로스(하락)"),
+}
+
+
+def _fmt_val(key: str, val) -> str:
+    """bool 값을 한국어 레이블로 변환."""
+    if isinstance(val, bool):
+        labels = _BOOL_LABELS.get(key, ("예", "아니오"))
+        return labels[0] if val else labels[1]
+    return str(val)
+
+
 def _format_stock_infos(stock_infos: dict[str, dict]) -> str:
     """종목 기업정보 dict를 프롬프트용 텍스트로 변환."""
+    SKIP = {"종목코드", "종목명"}
     lines = []
     for code, info in stock_infos.items():
         name = info.get("종목명", code)
         lines.append(f"【{name} ({code})】")
         for k, v in info.items():
-            if k not in ("종목코드", "종목명") and v:
-                lines.append(f"  {k}: {v}")
+            if k in SKIP:
+                continue
+            if v is None or v == "":
+                continue
+            lines.append(f"  {k}: {_fmt_val(k, v)}")
     return "\n".join(lines)
+
+
+def _format_surge(surge_stocks: list[dict]) -> str:
+    """거래량 급등 종목 리스트를 프롬프트용 한 줄 텍스트로 변환."""
+    if not surge_stocks:
+        return ""
+    return ", ".join(
+        f"{s['종목명']}({s['배율']}배 {s['등락률']:+.1f}%)"
+        for s in surge_stocks
+    )
 
 
 def _build_telegram_message(analysis: str) -> str:
@@ -261,9 +309,17 @@ def _second_pass(
     reports_text: str,
     first_result: str,
     stock_infos: dict[str, dict],
+    surge_stocks: list[dict],
 ) -> str:
     """2차 최종 분석: 기업정보 포함, 스트리밍 출력. 전체 텍스트 반환."""
     info_block = _format_stock_infos(stock_infos) if stock_infos else "조회된 기업정보 없음"
+
+    surge_line = _format_surge(surge_stocks)
+    surge_block = (
+        f"=== 오늘 거래량 급등 종목 (20일 평균 대비) ===\n{surge_line}\n\n"
+        "※ 리포트 추천 종목 중 거래량 급등 종목과 겹치는 경우 더 강한 매수 신호로 판단하세요.\n\n"
+        if surge_line else ""
+    )
 
     prompt = (
         f"아래는 {TODAY} 발행된 시장·산업·기업 분류 증권사 리서치 리포트와\n"
@@ -271,6 +327,7 @@ def _second_pass(
         f"=== 리서치 리포트 ===\n{reports_text}\n\n"
         f"=== 1차 추천 종목 선별 결과 ===\n{first_result}\n\n"
         f"=== 추천 종목 실시간 기업정보 ===\n{info_block}\n\n"
+        f"{surge_block}"
         "위 모든 정보를 종합하여 최종 투자 분석 결과를 아래 형식으로 작성하세요.\n"
         "투자자 성향: 중장기(3~6개월) 보유, 기업 성장성 기반, 목표 수익률 연 10%.\n\n"
         "## 📊 오늘의 시장 요약\n"
@@ -281,12 +338,14 @@ def _second_pass(
         "- 💡 성장 근거:\n"
         "- ⚠️ 리스크:\n\n"
         "## 💎 3~6개월 보유 추천 종목 TOP5\n"
-        "실시간 기업정보(현재가, 목표주가, PER, PBR 등)를 반영하여 작성하세요.\n"
+        "실시간 기업정보(현재가, 목표주가, PER, PBR)와 기술적 지표(MA, RSI, MACD 등)를 모두 반영하여 작성하세요.\n"
         "각 종목마다 아래 형식으로 작성하세요:\n"
         "**1. 종목명 (종목코드)**\n"
         "- 📈 기업 성장성 근거:\n"
         "- 💰 현재가: / 🎯 목표가: / 📊 upside:\n"
         "- 📉 PER: / PBR: / 외국인보유율:\n"
+        "- 📐 기술적 신호: MA20 위/아래 / 골든크로스 여부 / RSI14 / MACD(강세·약세) / 외국인 연속순매수\n"
+        "- 🔍 종합 판단: (기업 펀더멘털 + 기술적 신호 종합 평가)\n"
         "- ⚠️ 리스크:\n\n"
         "## 🚫 피해야 할 종목/섹터\n"
         "리포트에서 부정적으로 언급되거나, 중장기 성장성이 불투명한 섹터·종목과 그 이유를 작성하세요.\n\n"
@@ -301,6 +360,7 @@ def _second_pass(
         config=types.GenerateContentConfig(
             system_instruction=_SYSTEM,
             max_output_tokens=8192,
+            temperature=0,
         ),
     ):
         if chunk.text:
@@ -309,7 +369,7 @@ def _second_pass(
     return "".join(parts)
 
 
-def analyze_with_gemini(reports_text: str) -> None:
+def analyze_with_gemini(reports_text: str, surge_stocks: list[dict]) -> None:
     """2패스 Gemini 분석: 1차 종목 선별 → 기업정보 조회 → 2차 최종 분석."""
     client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -330,31 +390,45 @@ def analyze_with_gemini(reports_text: str) -> None:
         for code in codes:
             stock_infos[code] = get_stock_info(code)
 
-        SHOW_KEYS = ["현재가", "목표주가", "PER", "PBR", "외국인보유율", "시가총액", "52주최고", "52주최저", "배당수익률"]
+        BASIC_KEYS = ["현재가", "목표주가", "PER", "PBR", "외국인보유율", "시가총액", "52주최고", "52주최저", "배당수익률"]
+        TECH_KEYS = ["MA5", "MA20", "MA60", "MA20_위", "골든크로스", "RSI14", "MACD", "MACD_signal", "MACD_histogram", "외국인연속순매수"]
         for code, info in stock_infos.items():
             print(f"\n  [{info.get('종목명', code)} ({code})]")
-            for k in SHOW_KEYS:
+            for k in BASIC_KEYS:
                 if info.get(k):
                     print(f"    {k}: {info[k]}")
+            tech_lines = []
+            for k in TECH_KEYS:
+                if k in info:
+                    tech_lines.append(f"{k}: {_fmt_val(k, info[k])}")
+            if tech_lines:
+                print(f"    [기술적 지표] " + "  /  ".join(tech_lines[:4]))
+                if len(tech_lines) > 4:
+                    print(f"                 " + "  /  ".join(tech_lines[4:]))
     else:
         print("[5/6] 기업정보 조회 건너뜀 (종목코드 없음)")
 
     print("[6/6] AI 2차 분석: 최종 리포트 생성 중...\n")
     print("=" * 60)
-    full_text = _second_pass(client, reports_text, first_result, stock_infos)
+    full_text = _second_pass(client, reports_text, first_result, stock_infos, surge_stocks)
     print("\n" + "=" * 60)
 
     if not full_text:
         return
 
     # 결과 파일 저장 (send_report.bat 에서도 재사용 가능)
-    report_path = LOG_DIR / "last_report.txt"
+    report_path = REPORT_DIR / "last_report.txt"
+    dated_path = REPORT_DIR / f"{TODAY_PARAM}.txt"
     telegram_msg = _build_telegram_message(full_text)
     report_path.write_text(telegram_msg, encoding="utf-8")
+    dated_path.write_text(telegram_msg, encoding="utf-8")
 
-    print("\n[텔레그램] 전송 중...")
-    ok = send_message(telegram_msg)
-    print("[텔레그램] 전송 완료" if ok else "[텔레그램] 전송 실패 (last_report.txt 확인)")
+    if TELEGRAM_ENABLED:
+        print("\n[텔레그램] 전송 중...")
+        ok = send_message(telegram_msg)
+        print("[텔레그램] 전송 완료" if ok else "[텔레그램] 전송 실패 (last_report.txt 확인)")
+    else:
+        print("\n[텔레그램] 전송 건너뜀 (TELEGRAM_ENABLED=false)")
 
 
 def main() -> None:
@@ -379,6 +453,18 @@ def main() -> None:
     reports = get_today_reports()
     if not reports:
         sys.exit(f"오늘({TODAY}) 시장·산업 분류 리포트를 찾을 수 없습니다.")
+
+    surge_stocks: list[dict] = []
+    try:
+        print("[거래량] 급등 종목 스캔 중...", end="", flush=True)
+        surge_stocks = get_volume_surge()
+        if surge_stocks:
+            names = ", ".join(f"{s['종목명']}({s['배율']}배)" for s in surge_stocks)
+            print(f" → {len(surge_stocks)}개: {names}")
+        else:
+            print(" → 조건 충족 종목 없음")
+    except Exception as exc:
+        print(f" → 거래량 급등 조회 실패 (계속 진행): {exc}")
 
     cache_dir = PDF_CACHE_DIR / TODAY_PARAM
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -413,7 +499,7 @@ def main() -> None:
     combined = ("\n\n" + "─" * 40 + "\n\n").join(all_texts)
     combined = combined[:MAX_TOTAL_CHARS]
 
-    analyze_with_gemini(combined)
+    analyze_with_gemini(combined, surge_stocks)
 
 
 if __name__ == "__main__":
