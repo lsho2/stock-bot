@@ -1,8 +1,45 @@
+# 환경변수 (절대 공개 금지)
 .env
-token.json
-token_real.json
+.env.*
+*.env
+!.env.example
+
+# 토큰 / 인증
+*token*
+*secret*
+*credentials*
+
+# 데이터 (개인 매매 기록)
+positions.json
+data/
+C:/Stock/data/
+
+# 한경 PDF 캐시
+hankyungpdf/
+*.pdf
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
-hankyungpdf/
+.Python
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 로그
+*.log
 logs/
+
+# 보고서 캐시
+last_report.txt
+last_analysis.txt

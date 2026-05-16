@@ -10,4 +10,3 @@ echo [%date% %time%] 실행 시작 >> "%LOG_FILE%"
 "C:\Users\jur08\AppData\Local\Programs\Python\Python313\python.exe" consensus.py >> "%LOG_FILE%" 2>&1
 echo [%date% %time%] 실행 완료 >> "%LOG_FILE%"
 
-pause

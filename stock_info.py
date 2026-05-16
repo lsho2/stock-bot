@@ -59,7 +59,11 @@ def get_real_token() -> str:
 
 
 def _fetch_kis(stock_code: str) -> dict:
-    """KIS API로 현재가, 52주 최고/최저, PER, 외국인보유율 조회."""
+    """KIS API로 현재가, 52주 최고/최저, PER, 외국인보유율 조회.
+
+    KIS 모의투자 서버가 연속 호출 시 빈 output을 반환하는 경우가 있어
+    rt_cd != '0' 또는 stck_prpr 이 비면 최대 2회 재시도.
+    """
     token = get_token()
     url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price"
     headers = {
@@ -72,23 +76,43 @@ def _fetch_kis(stock_code: str) -> dict:
         "fid_cond_mrkt_div_code": "J",
         "fid_input_iscd": stock_code,
     }
-    resp = requests.get(url, headers=headers, params=params, timeout=10)
-    data = resp.json()
-    if DEBUG:
-        print(f"  [DEBUG] KIS inquire-price 응답:\n{json.dumps(data, ensure_ascii=False, indent=2)}")
-    out = data.get("output", {})
+    out: dict = {}
+    for attempt in range(3):
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        data = resp.json()
+        if DEBUG:
+            print(f"  [DEBUG] KIS inquire-price 응답:\n{json.dumps(data, ensure_ascii=False, indent=2)}")
+        out = data.get("output", {})
+        # rt_cd='0' + stck_prpr 있으면 정상
+        if data.get("rt_cd") == "0" and out.get("stck_prpr") and out["stck_prpr"] != "0":
+            break
+        if attempt < 2:
+            time.sleep(0.3)
+            if DEBUG:
+                print(f"  [DEBUG _fetch_kis] {stock_code} 재시도 {attempt+1}/2 (rt_cd={data.get('rt_cd')!r})")
 
     def fmt_price(v: str) -> str:
         return f"{int(v):,}원" if v and v.strip("0") else ""
 
     if DEBUG:
         print(f"  [DEBUG] hts_kor_isnm={out.get('hts_kor_isnm')!r}  bstp_kor_isnm={out.get('bstp_kor_isnm')!r}  stck_shrn_iscd={out.get('stck_shrn_iscd')!r}")
+
+    chg_rt = out.get("prdy_ctrt", "")
+    try:
+        chg_str = f"{float(chg_rt):+.2f}%" if chg_rt else ""
+    except ValueError:
+        chg_str = ""
+
     return {
-        "종목명": out.get("hts_kor_isnm", ""),
-        "현재가": fmt_price(out.get("stck_prpr", "")),
+        "종목명":   out.get("hts_kor_isnm", ""),
+        "현재가":   fmt_price(out.get("stck_prpr", "")),
+        "시가":     fmt_price(out.get("stck_oprc", "")),
+        "고가":     fmt_price(out.get("stck_hgpr", "")),
+        "저가":     fmt_price(out.get("stck_lwpr", "")),
+        "등락률":   chg_str,
         "52주최고": fmt_price(out.get("w52_hgpr", "")),
         "52주최저": fmt_price(out.get("w52_lwpr", "")),
-        "PER": f"{out['per']}배" if out.get("per") and out["per"] != "0.00" else "",
+        "PER":      f"{out['per']}배" if out.get("per") and out["per"] != "0.00" else "",
         "외국인보유율": f"{out['hts_frgn_ehrt']}%" if out.get("hts_frgn_ehrt") else "",
     }
 
@@ -308,6 +332,26 @@ def get_investor_data(stock_code: str) -> list[dict]:
             "기관순매수": int(row["orgn_ntby_qty"]) if row.get("orgn_ntby_qty") else 0,
         })
     return result
+
+
+def get_intraday_info(stock_code: str) -> dict:
+    """KIS FHKST01010100으로 장중 실시간 정보 조회.
+
+    _fetch_kis 를 재사용하므로 별도 HTTP 요청 없음.
+    반환: {시가, 고가, 저가, 현재가, 등락률}
+    """
+    try:
+        kis = _fetch_kis(stock_code)
+    except Exception as exc:
+        print(f"  장중 정보 조회 오류 ({stock_code}): {exc}")
+        return {}
+    return {
+        "시가":   kis.get("시가", ""),
+        "고가":   kis.get("고가", ""),
+        "저가":   kis.get("저가", ""),
+        "현재가": kis.get("현재가", ""),
+        "등락률": kis.get("등락률", ""),
+    }
 
 
 def get_stock_info(stock_code: str) -> dict:

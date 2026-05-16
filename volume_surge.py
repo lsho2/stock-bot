@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""네이버 증권 거래량 상위 종목 탐색 (Selenium 크롤링)."""
+"""네이버 증권 거래량 상위 종목 탐색 (requests + BeautifulSoup 크롤링)."""
 
 import re
 import time
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+
+import requests
+from bs4 import BeautifulSoup
 
 from stock_info import get_chart_data
 
@@ -17,19 +15,6 @@ TOP_N = 10               # 최종 출력 건수
 CANDIDATES = 50          # 일봉 조회할 후보 수
 
 NAVER_QUANT_URL = "https://finance.naver.com/sise/sise_quant.naver"
-
-
-def _chrome_options() -> Options:
-    opts = Options()
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
-    return opts
 
 
 def _parse_int(val: str) -> int:
@@ -47,7 +32,7 @@ def _parse_float(val: str) -> float:
 
 
 def _fetch_volume_rank_naver(sosok: int) -> list[dict]:
-    """네이버 증권 거래량 순위 크롤링 (Selenium).
+    """네이버 증권 거래량 순위 크롤링 (requests + BeautifulSoup).
 
     sosok: 0=코스피, 1=코스닥
     반환: [{"종목명", "종목코드", "현재가", "등락률", "거래량"}, ...]
@@ -56,54 +41,54 @@ def _fetch_volume_rank_naver(sosok: int) -> list[dict]:
     url = f"{NAVER_QUANT_URL}?sosok={sosok}"
     print(f"  [{label}] 크롤링: {url}")
 
-    driver = webdriver.Chrome(options=_chrome_options())
-    results: list[dict] = []
-    try:
-        driver.get(url)
-
-        # 테이블 데이터 행 로딩 대기 (JS 렌더링 완료)
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "table.type_2 tbody tr td a")
-            )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
+    }
+    resp = requests.get(url, headers=headers, timeout=15)
+    resp.encoding = "euc-kr"
 
-        rows = driver.find_elements(By.CSS_SELECTOR, "table.type_2 tbody tr")
-        print(f"  [{label}] tr 총 {len(rows)}개")
+    soup = BeautifulSoup(resp.text, "html.parser")
+    table = soup.select_one("table.type_2")
+    if not table:
+        print(f"  [{label}] 테이블 없음")
+        return []
 
-        for row in rows:
-            tds = row.find_elements(By.TAG_NAME, "td")
-            # 헤더 구조: N | 종목명 | 현재가 | 전일비 | 등락률 | 거래량 | ...
-            if len(tds) < 6:
-                continue
+    rows = table.find_all("tr")
+    print(f"  [{label}] tr 총 {len(rows)}개")
 
-            # 종목명 + 코드 (td[1] 안의 anchor)
-            anchors = tds[1].find_elements(By.TAG_NAME, "a")
-            if not anchors:
-                continue
-            name = anchors[0].text.strip()
-            if not name:
-                continue
-            href = anchors[0].get_attribute("href") or ""
-            m = re.search(r"code=(\d{6})", href)
-            if not m:
-                continue
-            code = m.group(1)
+    results: list[dict] = []
+    for row in rows:
+        tds = row.find_all("td")
+        # 헤더 구조: N | 종목명 | 현재가 | 전일비 | 등락률 | 거래량 | ...
+        if len(tds) < 6:
+            continue
 
-            price = _parse_int(tds[2].text)
-            rate = _parse_float(tds[4].text)
-            volume = _parse_int(tds[5].text)
+        anchor = tds[1].find("a")
+        if not anchor:
+            continue
+        name = anchor.get_text(strip=True)
+        if not name:
+            continue
+        href = anchor.get("href", "")
+        m = re.search(r"code=(\d{6})", href)
+        if not m:
+            continue
+        code = m.group(1)
 
-            results.append({
-                "종목명": name,
-                "종목코드": code,
-                "현재가": price,
-                "등락률": rate,
-                "거래량": volume,
-            })
+        price = _parse_int(tds[2].get_text(strip=True))
+        rate = _parse_float(tds[4].get_text(strip=True))
+        volume = _parse_int(tds[5].get_text(strip=True))
 
-    finally:
-        driver.quit()
+        results.append({
+            "종목명": name,
+            "종목코드": code,
+            "현재가": price,
+            "등락률": rate,
+            "거래량": volume,
+        })
 
     print(f"  [{label}] 수집 완료: {len(results)}개")
     return results
