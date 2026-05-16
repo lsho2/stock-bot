@@ -1,21 +1,21 @@
-# 📊 Stock Auto-Trading Bot
+# Stock Auto-Trading Bot
 
 > **한국 주식 스윙 트레이딩 자동화 봇** — KIS API + Google Gemini AI 기반  
 > Korean swing-trading bot powered by KIS Open API and Google Gemini.
 
 ---
 
-## 🎯 주요 기능 / Features
+## 주요 기능 / Features
 
 | 기능 | 설명 |
 |------|------|
-| 🤖 AI 추천 분석 | 한국경제 PDF 파싱 → Gemini 2차 분석 → 최종 추천 종목 선정 |
-| 📈 자동 매매 | 손절(-5%), 트레일링 스탑(-3%), 목표가(+10%) 자동 실행 |
-| 🔄 잔고 자동 동기화 | 첫 실행 시 증권사 잔고와 positions.json 자동 정합 |
-| 📊 일간 보고서 | 매일 15:35 당일 손익 + 보유 종목 평가 텔레그램 전송 |
-| 💾 거래 기록 | 모든 매수/매도 자동 기록 (trades.json, daily_pnl.json) |
-| 📡 텔레그램 알림 | 매매 체결·추천·보고서 실시간 알림 |
-| 🛡️ 펀더멘털 필터 | 홍진채 '거인의 어깨' 기준 재무 스크리닝 |
+|  AI 추천 분석 | 한국경제 PDF 파싱 → Gemini 2차 분석 → 최종 추천 종목 선정 |
+|  자동 매매 | 손절(-5%), 트레일링 스탑(-3%), 목표가(+10%) 자동 실행 |
+|  잔고 자동 동기화 | 첫 실행 시 증권사 잔고와 positions.json 자동 정합 |
+|  일간 보고서 | 매일 15:35 당일 손익 + 보유 종목 평가 텔레그램 전송 |
+|  거래 기록 | 모든 매수/매도 자동 기록 (trades.json, daily_pnl.json) |
+|  텔레그램 알림 | 매매 체결·추천·보고서 실시간 알림 |
+|  펀더멘털 필터 | 홍진채 '거인의 어깨' 기준 재무 스크리닝 |
 
 ---
 
@@ -130,17 +130,13 @@ python daily_report.py
 
 ## ⚠️ Disclaimer
 
-이 프로젝트는 **개인 학습 및 자동화 실험 목적**으로 제작되었습니다.
+이 프로젝트는 **개인 학습 및 자동화 실험 목적**으로 제작
 
-- 투자 추천이 아니며, 실손실에 대한 책임은 사용자 본인에게 있습니다.
-- KIS 모의투자 API 기반으로 작성되었으나 실계좌 사용 시 충분한 검증이 필요합니다.
-- API 키, 계좌번호 등 민감 정보는 절대 공개 저장소에 커밋하지 마세요.
+
 
 > This project is for **personal learning and automation research only**.  
 > Not financial advice. Use at your own risk.
 
 ---
 
-## 📄 License
 
-MIT
