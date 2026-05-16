@@ -25,6 +25,7 @@ from telegram_alert import send_broadcast
 from volume_surge import get_volume_surge
 from fundamental_filter import evaluate_fundamentals, FundamentalResult
 from tracker import log_recommendation, analyze_recommendations
+from market_context import get_market_context
 
 load_dotenv()
 
@@ -415,6 +416,7 @@ def _second_pass(
     intraday_infos: dict[str, dict] | None = None,
     exclusion_note: str = "",
     reco_note: str = "",
+    market_note: str = "",
 ) -> str:
     """2차 최종 분석: 기업정보+펀더멘털+거래량 급등 포함, 스트리밍 출력. 전체 텍스트 반환."""
     def _format_surge(stocks):
@@ -447,6 +449,7 @@ def _second_pass(
         f"=== 1차 추천 종목 선별 결과 ===\n{first_result}\n\n"
         f"=== 추천 종목 실시간 기업정보 + 기술적 지표 + 펀더멘털 평가 ===\n{info_block}\n\n"
         f"=== 오늘 거래량 급등 종목 ===\n{_format_surge(surge_stocks)}\n\n"
+        f"{market_note}\n"
         f"{exclusion_note}\n"
         f"{reco_note}\n"
         f"{fail_note}"
@@ -528,6 +531,23 @@ def analyze_with_gemini(reports_text: str, surge_stocks: list[dict]) -> None:
     _now = datetime.now()
     is_intraday = (_now.weekday() < 5) and (dtime(11, 0) <= _now.time() <= dtime(15, 30))
     print(f"[모드] {'장중 매매' if is_intraday else '일간 추천'} 모드")
+
+    print("[시장] 시장 컨텍스트 조회 중...")
+    market_note = ""
+    try:
+        market = get_market_context()
+        k = market["kospi"]
+        q = market["kosdaq"]
+        print(f"[시장] 코스피 {k['change']:+.1f}% {k['trend']} | 코스닥 {q['change']:+.1f}% {q['trend']}")
+        print(f"[시장] {market['trend_summary']}")
+        market_note = (
+            f"=== 시장 컨텍스트 ===\n"
+            f"코스피: {k['price']}pt ({k['change']:+.1f}%, {k['trend']})\n"
+            f"코스닥: {q['price']}pt ({q['change']:+.1f}%, {q['trend']})\n"
+            f"{market['trend_summary']}\n"
+        )
+    except Exception as exc:
+        print(f"[시장] 컨텍스트 조회 실패 (스킵): {exc}")
 
     print("[4/6] AI 1차 분석: 추천 종목 선별 중...", end="", flush=True)
     first_result = _first_pass(client, reports_text)
@@ -641,7 +661,7 @@ def analyze_with_gemini(reports_text: str, surge_stocks: list[dict]) -> None:
 
     print("[6/6] AI 2차 분석: 최종 리포트 생성 중...\n")
     print("=" * 60)
-    full_text = _second_pass(client, reports_text, first_result, stock_infos, surge_stocks, fundamentals, is_intraday, intraday_infos, exclusion_note, reco_note)
+    full_text = _second_pass(client, reports_text, first_result, stock_infos, surge_stocks, fundamentals, is_intraday, intraday_infos, exclusion_note, reco_note, market_note)
     print("\n" + "=" * 60)
 
     if not full_text:

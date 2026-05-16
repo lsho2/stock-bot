@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from stock_info import get_token
 from telegram_alert import send_message
 from tracker import log_daily_pnl
+from market_context import get_market_context
 
 load_dotenv()
 
@@ -257,8 +258,14 @@ def main() -> None:
             price_map[pos["code"]] = fallback
             print(f"  [{pos['name']}] 현재가 대체: {fallback:,}원")
 
-    # 코스피 등락률 (실패해도 계속 진행)
+    # 코스피 등락률: KIS API 시도 → 실패 시 네이버 증권 fallback
     kospi_rate = _fetch_kospi_rate(token)
+    if kospi_rate is None:
+        try:
+            kospi_rate = get_market_context()["kospi"]["change"]
+            print(f"  [코스피] 네이버 증권 fallback: {kospi_rate:+.2f}%")
+        except Exception:
+            pass
 
     # daily_pnl.json 기록
     log_daily_pnl(seed_money, price_map)

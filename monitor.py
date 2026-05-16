@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from stock_info import get_token
 from telegram_alert import send_message
 from tracker import log_buy, log_sell
+from market_context import get_market_context
 
 load_dotenv()
 
@@ -657,6 +658,7 @@ def main() -> None:
 
     error_counts: dict[str, int] = {}
     last_check_minute = -1
+    last_market_hour  = -1
 
     try:
         while True:
@@ -673,6 +675,21 @@ def main() -> None:
                 _daily_summary(data)
                 _save(data)
                 sys.exit(0)
+
+            # 1시간마다 시장 패닉 감지
+            if now.hour != last_market_hour:
+                last_market_hour = now.hour
+                try:
+                    mkt = get_market_context()
+                    k   = mkt["kospi"]
+                    log.info(f"[시장] 코스피 {k['change']:+.1f}% ({k['trend']})")
+                    if k["trend"] == "panic":
+                        send_message(
+                            f"🚨 시장 패닉 (코스피 {k['change']:+.1f}%)\n"
+                            f"보유 종목 손절 라인 -7% 임시 완화 권장"
+                        )
+                except Exception as exc:
+                    log.debug(f"[시장] 컨텍스트 조회 실패: {exc}")
 
             # 09:00 ~ 15:35: CHECK_INTERVAL 분마다 체크
             if now.minute % CHECK_INTERVAL == 0 and now.minute != last_check_minute:
