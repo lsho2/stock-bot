@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """KIS 모의투자 자동 매수 - last_analysis.txt 기반."""
 
+import argparse
 import json
 import os
 import re
@@ -165,9 +166,46 @@ def _kis_order(token: str, code: str, qty: int) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="KIS 자동 매수")
+    parser.add_argument("--force",   action="store_true", help="시간 필터 우회 (긴급 매수용)")
+    parser.add_argument("--dry-run", action="store_true", help="실제 매수 없이 시뮬레이션")
+    args = parser.parse_args()
+    dry_run = DRY_RUN or args.dry_run
+
     if not ANALYSIS_PATH.exists():
         sys.exit(f"분석 파일 없음: {ANALYSIS_PATH}")
 
+    # ── Token 획득 ───────────────────────────────────────────────────
+    token = get_token() if not dry_run else ""
+
+    # ── 시간 체크 ────────────────────────────────────────────────────
+    now = datetime.now()
+    wd  = ["월", "화", "수", "목", "금", "토", "일"][now.weekday()]
+    print(f"[시간 체크] 현재 {now.strftime('%Y-%m-%d %H:%M:%S')} ({wd})")
+
+    if not args.force:
+        if now.weekday() >= 5:
+            msg = "[시간 차단] 주말 → 종료"
+            print(msg)
+            send_message(msg)
+            return
+        if now.hour < 9:
+            print(f"[시간 차단] 장 시작 전 ({now.strftime('%H:%M')}) → 종료")
+            return
+        if now.hour == 9 and now.minute < 30:
+            warn = "⚠️ [경고] 09:30 이전 매수 - 시가 변동성 큼"
+            print(warn)
+            send_message(warn)
+            # 경고 후 진행
+        elif now.hour > 15 or (now.hour == 15 and now.minute >= 20):
+            print(f"[시간 차단] 장 마감 임박 ({now.strftime('%H:%M')}) → 종료")
+            return
+        else:
+            print("[시간 OK] 정상 매수 시간")
+    else:
+        print("[시간 체크] --force 옵션으로 시간 필터 우회")
+
+    # ── 종목 파싱 ────────────────────────────────────────────────────
     text = ANALYSIS_PATH.read_text(encoding="utf-8")
     print(f"[1/5] 분석 파일 로드 완료 ({len(text):,}자)")
 
@@ -181,7 +219,6 @@ def main() -> None:
     print(f"  비중: {weights}")
 
     print("[4/5] 매수 주문 처리 중...")
-    token = get_token() if not DRY_RUN else ""
 
     buy_date = datetime.now().strftime("%Y-%m-%d")
     positions = []
@@ -207,7 +244,7 @@ def main() -> None:
         order_no = ""
         status   = "PENDING"
 
-        if DRY_RUN:
+        if dry_run:
             print(f"  [DRY_RUN] {s['name']}({code}) {qty}주 @ {s['buy_price']:,}원 ({ratio}%)")
             order_no = "DRY_RUN"
         else:

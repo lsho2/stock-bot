@@ -240,7 +240,7 @@ def filter_owned_and_recent_losses(
         owned = [
             (p["code"], p.get("name", p["code"]))
             for p in pos_data.get("positions", [])
-            if p.get("status") == "OPEN"
+            if p.get("status") in ("OPEN", "HOLDING")
         ]
     except Exception:
         pass

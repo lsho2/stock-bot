@@ -18,6 +18,11 @@ KIS_BASE_URL = "https://openapivts.koreainvestment.com:29443"
 KIS_REAL_URL = "https://openapi.koreainvestment.com:9443"
 TOKEN_FILE = "token.json"
 
+def is_spac(name: str) -> bool:
+    """스팩 종목 여부 판별. KRX 스팩은 항상 한글 '스팩' 표기."""
+    return "스팩" in (name or "")
+
+
 _naver = requests.Session()
 _naver.headers.update({
     "User-Agent": (

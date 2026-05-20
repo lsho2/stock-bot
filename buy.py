@@ -16,7 +16,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from stock_info import get_token
+from stock_info import get_token, get_stock_info
 from tracker import log_buy
 
 load_dotenv()
@@ -67,7 +67,7 @@ def _fetch_quote(token: str, code: str) -> dict:
     resp.raise_for_status()
     out = resp.json().get("output", {})
     return {
-        "name":    out.get("hts_kor_isnm", code),
+        "name":    (out.get("hts_kor_isnm") or "").strip() or code,
         "price":   int(out.get("stck_prpr", "0") or "0"),
         "chg_pct": out.get("prdy_ctrt", ""),
     }
@@ -152,7 +152,7 @@ def _add_to_positions(
     positions = data.get("positions", [])
 
     existing = next(
-        (p for p in positions if p["code"] == code and p["status"] == "OPEN"),
+        (p for p in positions if p["code"] == code and p["status"] in ("OPEN", "HOLDING")),
         None,
     )
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -182,6 +182,7 @@ def _add_to_positions(
             "last_seen_price": buy_price,
             "buy_order_no":    order_no,
             "buy_time":        now_str,
+            "created_at":      now_str,
         })
         print(f"  [포지션] 신규 추가: {name}({code})")
 
@@ -219,6 +220,13 @@ def main() -> None:
         sys.exit(f"시세 조회 실패: {exc}")
 
     name      = quote["name"]
+    # KIS VTS가 종목명을 못 반환하면 네이버 금융 fallback
+    if not name or name == code:
+        try:
+            info = get_stock_info(code)
+            name = info.get("종목명") or code
+        except Exception:
+            name = code
     cur_price = quote["price"]
     chg_pct   = quote["chg_pct"]
 
@@ -267,7 +275,7 @@ def main() -> None:
     filled_amount = filled_price * qty
 
     # ── 5) tracker 기록 ──────────────────────────────────────────────
-    log_buy(code, name, filled_price, qty, source="buy.py")
+    log_buy(code, name, filled_price, qty, source="buy.py", entry_signal="manual")
 
     # ── 6) positions.json 업데이트 ───────────────────────────────────
     _add_to_positions(code, name, filled_price, qty, order_no)
