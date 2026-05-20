@@ -42,3 +42,19 @@ logs/
 # 보고서 캐시
 last_report.txt
 last_analysis.txt
+
+# 자동매수 런타임 데이터
+data/rebound_auto_state_*.json
+data/rebound_scan_*.json
+data/rebound_summary_last.txt
+data/backtest_*.json
+data/upperlimit_*.json
+
+# 백업 / 잠금
+*.bak.*
+*.lock
+
+# 1회성 분석·수정 스크립트
+fix_*_*.py
+check_consistency_*.py
+analyze_trades_*.py
